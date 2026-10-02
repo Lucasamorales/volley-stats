@@ -5,6 +5,7 @@ from volleystats import court
 from volleystats.actions import label_actions
 from volleystats.attribution import nearest_player
 from volleystats.contacts import ball_at, detect_contacts
+from volleystats.pipeline import merge_rallies
 from volleystats.rallies import segment_rallies
 from volleystats.selection import select_track
 from volleystats.schema import Action, Contact, PlayerObs, Rally, Side, Team
@@ -249,6 +250,37 @@ def test_complete_set_has_no_warnings():
     resolve_winners(rallies)
     assert running_score(rallies)[-1] == (25, 0)
     assert check_sets(rallies) == []
+
+
+# --- merging a re-run with reviewed work ------------------------------------
+
+
+def span(start, end, frames, **kw):
+    contacts = [Contact(frame=f, x=0, y=0, team=US, court_xy=(4.5, 4.0)) for f in frames]
+    return Rally(index=0, start_frame=start, end_frame=end, contacts=contacts, **kw)
+
+
+def test_finished_rally_survives_a_rerun_untouched():
+    done = span(100, 300, [150, 200], reviewed=True)
+    rerun = [span(90, 310, [152, 203, 250]), span(400, 500, [450])]
+    merged = merge_rallies([done], rerun, fps=30)
+    assert [(r.start_frame, len(r.contacts)) for r in merged] == [(100, 2), (400, 1)]
+    assert [r.index for r in merged] == [0, 1]
+
+
+def test_reviewed_contacts_survive_in_an_unfinished_rally():
+    old = span(100, 300, [150, 200, 260])
+    old.contacts[0].reviewed, old.contacts[0].action = True, Action.BLOCK
+    old.contacts[1].reviewed = old.contacts[1].deleted = True
+    merged = merge_rallies([old], [span(95, 305, [152, 198, 240])], fps=30)
+    by_frame = {c.frame: c for c in merged[0].contacts}
+    assert sorted(by_frame) == [150, 200, 240]  # re-detections at 152 and 198 are the same touches
+    assert by_frame[150].action is Action.BLOCK and by_frame[200].deleted
+
+
+def test_rejected_rally_stays_rejected():
+    merged = merge_rallies([span(100, 300, [150], valid=False)], [span(120, 280, [150])], fps=30)
+    assert len(merged) == 1 and merged[0].valid is False
 
 
 # --- stats ---------------------------------------------------------------

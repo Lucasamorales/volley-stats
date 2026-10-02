@@ -21,7 +21,9 @@ def rally_events(rally: Rally) -> list[StatEvent]:
             kind=kind,
         )
 
-    touches = [c for c in rally.contacts if c.team is not None]
+    if rally.valid is False:
+        return []
+    touches = rally.touches
     events = [event(c, c.action.value) for c in touches if c.action is not Action.UNKNOWN]
     if rally.winner is None or not touches:
         return events

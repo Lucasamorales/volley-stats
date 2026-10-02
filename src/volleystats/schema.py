@@ -75,7 +75,9 @@ class Contact(BaseModel):
     court_xy: tuple[float, float] | None = None  # toucher's foot point, metres
     action: Action = Action.UNKNOWN
     ambiguous: bool = False  # another player was almost as close to the ball
-    reviewed: bool = False
+    reviewed: bool = False  # a person confirmed or edited this touch
+    deleted: bool = False  # a person marked it as not a touch; kept so re-runs do not bring it back
+    manual: bool = False  # added by a person, missed by detection
 
 
 class Rally(BaseModel):
@@ -84,8 +86,17 @@ class Rally(BaseModel):
     start_frame: int
     end_frame: int
     serving_team: Team | None = None
+    serving_reviewed: bool = False
     winner: Team | None = None
+    winner_reviewed: bool = False
+    valid: bool | None = None  # False = a person marked it as not a rally (warm-up, dead ball)
+    reviewed: bool = False  # a person finished checking this rally; re-runs leave it alone
     contacts: list[Contact] = Field(default_factory=list)
+
+    @property
+    def touches(self) -> list[Contact]:
+        """Contacts that count: attributed to a team and not rejected."""
+        return [c for c in self.contacts if c.team is not None and not c.deleted]
 
 
 class StatEvent(BaseModel):

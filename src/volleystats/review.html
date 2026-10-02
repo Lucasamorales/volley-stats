@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rally review</title>
+<style>
+  :root { --bg:#14171a; --panel:#1d2226; --line:#2e353b; --text:#e6e9ec; --dim:#8b959e;
+          --us:#4fd08a; --them:#ffa64d; --off:#8b959e; --ball:#ffe14d; --bad:#ff6b6b; --ok:#4fd08a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, sans-serif; }
+  header { display:flex; gap:12px; align-items:center; padding:8px 12px; background:var(--panel); border-bottom:1px solid var(--line); }
+  select, button { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 9px; font:inherit; }
+  button { cursor:pointer; } button:hover { border-color:var(--dim); }
+  button.on { border-color:var(--ok); color:var(--ok); }
+  main { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:12px; padding:12px; }
+  canvas#view { width:100%; background:#000; border-radius:8px; display:block; cursor:crosshair; }
+  canvas#timeline { width:100%; height:34px; margin-top:6px; background:var(--panel); border-radius:6px; display:block; cursor:pointer; }
+  aside { display:flex; flex-direction:column; gap:10px; min-width:0; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; }
+  h2 { margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); }
+  .row { display:flex; gap:6px; flex-wrap:wrap; }
+  #status { margin-left:auto; color:var(--dim); font-variant-numeric:tabular-nums; }
+  #touches { max-height:38vh; overflow:auto; margin:0; padding:0; list-style:none; }
+  #touches li { display:grid; grid-template-columns:54px 1fr auto; gap:8px; padding:5px 6px; border-radius:6px; cursor:pointer; font-variant-numeric:tabular-nums; }
+  #touches li:hover { background:var(--bg); }
+  #touches li.sel { outline:1px solid var(--ball); }
+  #touches li.deleted { color:var(--dim); text-decoration:line-through; }
+  .us { color:var(--us); } .them { color:var(--them); } .none { color:var(--bad); }
+  .tag { font-size:11px; color:var(--dim); }
+  kbd { background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:0 5px; font:12px ui-monospace, monospace; }
+  .keys { display:grid; grid-template-columns:auto 1fr; gap:3px 10px; color:var(--dim); font-size:13px; }
+  #msg { color:var(--ball); min-height:1.4em; }
+</style>
+</head>
+<body>
+<header>
+  <select id="video"></select>
+  <button id="prev">◀ rally</button>
+  <select id="rally"></select>
+  <button id="next">rally ▶</button>
+  <span id="msg"></span>
+  <span id="status"></span>
+</header>
+<main>
+  <div>
+    <canvas id="view" width="1280" height="720"></canvas>
+    <canvas id="timeline" width="1280" height="34"></canvas>
+  </div>
+  <aside>
+    <section>
+      <h2>This rally</h2>
+      <div class="row" style="margin-bottom:6px">
+        <button id="serve-us">Served: us <kbd>U</kbd></button>
+        <button id="serve-them">Served: them <kbd>T</kbd></button>
+        <button id="not-rally">Not a rally <kbd>Z</kbd></button>
+      </div>
+      <div class="row">
+        <button id="win-us">Won: us <kbd>W</kbd></button>
+        <button id="win-them">Won: them <kbd>L</kbd></button>
+        <button id="done">Done, next <kbd>D</kbd></button>
+      </div>
+    </section>
+    <section>
+      <h2>Touches</h2>
+      <ul id="touches"></ul>
+    </section>
+    <section>
+      <h2>Keys</h2>
+      <div class="keys">
+        <span><kbd>←</kbd> <kbd>→</kbd></span><span>step one frame (hold <kbd>Shift</kbd> for 10)</span>
+        <span><kbd>Space</kbd></span><span>play / pause &nbsp; <kbd>S</kbd> speed</span>
+        <span><kbd>N</kbd> <kbd>P</kbd></span><span>next / previous touch</span>
+        <span><kbd>Enter</kbd></span><span>touch is correct</span>
+        <span><kbd>X</kbd></span><span>not a touch</span>
+        <span><kbd>1</kbd>–<kbd>6</kbd></span><span>serve, receive, dig, set, attack, block</span>
+        <span>click</span><span>a player box on a touch frame to change who touched</span>
+        <span><kbd>A</kbd></span><span>add a missed touch here, then click the player</span>
+      </div>
+    </section>
+  </aside>
+</main>
+<script>
+const ACTIONS = ["serve", "receive", "dig", "set", "attack", "block"];
+const COLOURS = { us: "#4fd08a", them: "#ffa64d", null: "#8b959e" };
+const $ = id => document.getElementById(id);
+const view = $("view"), ctx = view.getContext("2d"), tl = $("timeline"), tctx = tl.getContext("2d");
+let stem = null, list = [], data = null, frame = 0, selected = null, playing = false, adding = false, speed = 0.5;
+let queue = Promise.resolve();
+const img = new Image();
+
+const api = async (path, body) => {
+  const res = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : undefined);
+  if (!res.ok) { say((await res.json()).detail || res.statusText); throw new Error(res.statusText); }
+  return res.json();
+};
+const say = text => { $("msg").textContent = text; if (text) setTimeout(() => { if ($("msg").textContent === text) $("msg").textContent = ""; }, 4000); };
+const rally = () => data.rally;
+const touchAt = f => rally().contacts.find(c => c.frame === f);
+
+async function loadVideos() {
+  const videos = await api("/api/videos");
+  $("video").innerHTML = videos.map(v => `<option value="${v.stem}">${v.stem} (${v.done}/${v.rallies} checked)</option>`).join("");
+  if (!videos.length) { say("No analysed videos yet: run the pipeline with 'all' first."); return; }
+  stem = videos[0].stem;
+  await loadList();
+}
+async function loadList(keep) {
+  list = await api(`/api/${stem}/rallies`);
+  const mark = { open: "", done: " ✓", rejected: " ✗" };
+  $("rally").innerHTML = list.map(r => `<option value="${r.index}">#${r.index} · set ${r.set} · ${((r.end - r.start) / 30).toFixed(0)}s${mark[r.state]}</option>`).join("");
+  if (keep === undefined) keep = (list.find(r => r.state === "open") || list[0]).index;
+  await openRally(keep);
+}
+async function openRally(index) {
+  say("Loading frames…");
+  $("rally").value = index;
+  data = await api(`/api/${stem}/rally/${index}`);
+  say("");
+  selected = null; adding = false; playing = false;
+  const first = rally().contacts[0];
+  show(first ? first.frame : rally().start_frame, first ? first.frame : null);
+  renderSide();
+}
+function show(f, select) {
+  frame = Math.max(rally().start_frame, Math.min(rally().end_frame - 1, f));
+  if (select !== undefined) selected = select;
+  else if (touchAt(frame)) selected = frame;
+  img.src = `/frame/${stem}/${frame}.jpg`;
+  renderSide();
+}
+img.onload = () => { draw(); if (playing) setTimeout(() => frame < rally().end_frame - 1 ? show(frame + 1) : (playing = false), 1000 / (data.fps * speed)); };
+
+function draw() {
+  ctx.drawImage(img, 0, 0, view.width, view.height);
+  const touch = touchAt(frame);
+  for (const p of data.boxes[frame] || []) {
+    const [x1, y1, x2, y2] = p.box, hit = touch && !touch.deleted && touch.track_id === p.track;
+    ctx.lineWidth = hit ? 5 : 2; ctx.strokeStyle = hit ? "#ffe14d" : COLOURS[p.team];
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    ctx.font = "15px system-ui"; ctx.fillStyle = COLOURS[p.team]; ctx.fillText(p.track, x1 + 2, y1 - 5);
+  }
+  const ball = data.ball[frame] || (touch && [touch.x, touch.y]);
+  if (ball) { ctx.lineWidth = 2; ctx.strokeStyle = "#ffe14d"; ctx.setLineDash(data.ball[frame] ? [] : [4, 4]); ctx.beginPath(); ctx.arc(ball[0], ball[1], 11, 0, 7); ctx.stroke(); ctx.setLineDash([]); }
+  let label = `frame ${frame}`;
+  if (touch) label += touch.deleted ? "  ·  rejected touch" : `  ·  ${touch.action} by ${touch.track_id ?? "nobody"} (${touch.team ?? "-"})`;
+  if (adding) label += "  ·  click the player who touched the ball";
+  ctx.font = "bold 20px system-ui"; ctx.lineWidth = 4; ctx.strokeStyle = "#000"; ctx.strokeText(label, 14, 28); ctx.fillStyle = "#fff"; ctx.fillText(label, 14, 28);
+  drawTimeline();
+}
+function drawTimeline() {
+  const r = rally(), w = tl.width, x = f => (f - r.start_frame) / (r.end_frame - r.start_frame) * w;
+  tctx.clearRect(0, 0, w, tl.height);
+  tctx.fillStyle = "#3a4249";
+  for (const f in data.ball) tctx.fillRect(x(+f), 26, 2, 4);
+  for (const c of r.contacts) {
+    tctx.fillStyle = c.deleted ? "#555" : c.team ? COLOURS[c.team] : "#ff6b6b";
+    tctx.fillRect(x(c.frame) - 2, 4, 4, c.reviewed ? 20 : 12);
+  }
+  tctx.fillStyle = "#fff"; tctx.fillRect(x(frame) - 1, 0, 2, tl.height);
+}
+function renderSide() {
+  if (!data) return;
+  const r = rally();
+  $("serve-us").className = r.serving_reviewed && r.serving_team === "us" ? "on" : "";
+  $("serve-them").className = r.serving_reviewed && r.serving_team === "them" ? "on" : "";
+  $("not-rally").className = r.valid === false ? "on" : "";
+  $("win-us").className = r.winner === "us" ? "on" : "";
+  $("win-them").className = r.winner === "them" ? "on" : "";
+  $("done").className = r.reviewed ? "on" : "";
+  $("touches").innerHTML = r.contacts.map(c => {
+    const cls = [c.frame === selected ? "sel" : "", c.deleted ? "deleted" : ""].join(" ");
+    const who = c.team ? `<span class="${c.team}">${c.team} #${c.track_id}</span>` : `<span class="none">nobody</span>`;
+    const tag = c.manual ? "added" : c.reviewed ? "checked" : c.ambiguous ? "unsure" : "";
+    return `<li class="${cls}" data-f="${c.frame}"><span>${c.frame}</span><span>${c.action} · ${who}</span><span class="tag">${tag}</span></li>`;
+  }).join("");
+  const left = r.contacts.filter(c => !c.reviewed).length;
+  $("status").textContent = `rally #${r.index} · ${left} touches unchecked · ${speed}× speed`;
+  document.querySelector("#touches li.sel")?.scrollIntoView({ block: "nearest" });
+}
+
+async function edit(body, then) {
+  data.rally = await api(`/api/${stem}/rally/${rally().index}/edit`, body);
+  if (then) await then();
+  renderSide(); draw();
+}
+function jump(dir) {
+  const frames = rally().contacts.map(c => c.frame);
+  const from = selected ?? frame;
+  const target = dir > 0 ? frames.find(f => f > from) : frames.filter(f => f < from).pop();
+  if (target !== undefined) show(target, target);
+}
+function needTouch() { if (selected === null) { say("Select a touch first (N / P)."); return false; } return true; }
+async function nextRally() {
+  const i = rally().index;
+  await loadList(Math.min(i + 1, list.length - 1));
+}
+
+const commands = {
+  ArrowLeft: e => show(frame - (e.shiftKey ? 10 : 1)),
+  ArrowRight: e => show(frame + (e.shiftKey ? 10 : 1)),
+  " ": () => { playing = !playing; if (playing) show(frame + 1); },
+  s: () => { speed = speed === 0.5 ? 1 : speed === 1 ? 0.25 : 0.5; renderSide(); },
+  n: () => jump(1), p: () => jump(-1),
+  Enter: () => {
+    if (!needTouch()) return;
+    if (!touchAt(selected).team) return say("Nobody is attached: click the player, or press X if it is not a touch.");
+    return edit({ op: "confirm", frame: selected }, () => jump(1));
+  },
+  x: () => needTouch() && edit({ op: "delete", frame: selected }, () => jump(1)),
+  Delete: () => commands.x(),
+  a: () => { if (touchAt(frame)) return say("There is already a touch at this frame."); adding = !adding; draw(); },
+  u: () => edit({ op: "serve", value: "us" }),
+  t: () => edit({ op: "serve", value: "them" }),
+  z: () => edit({ op: "not_rally" }, nextRally),
+  w: () => edit({ op: "winner", value: rally().winner === "us" ? null : "us" }),
+  l: () => edit({ op: "winner", value: rally().winner === "them" ? null : "them" }),
+  d: () => edit({ op: rally().reviewed ? "reopen" : "done" }, () => rally().reviewed && nextRally()),
+};
+ACTIONS.forEach((action, i) => commands[i + 1] = () => needTouch() && edit({ op: "action", frame: selected, value: action }));
+
+document.addEventListener("keydown", e => {
+  if (!data || e.target.tagName === "SELECT") return;
+  const run = commands[e.key] || commands[e.key.toLowerCase()];
+  if (!run) return;
+  e.preventDefault();
+  // Keys typed quickly must each see the result of the one before (e.g. Enter moves the selection).
+  queue = queue.then(() => { if (e.key !== " ") playing = false; return run(e); }).catch(() => {});
+});
+view.addEventListener("click", e => {
+  const box = view.getBoundingClientRect();
+  const x = (e.clientX - box.left) * view.width / box.width, y = (e.clientY - box.top) * view.height / box.height;
+  // Boxes overlap (far players sit inside the boxes of near ones), so take the
+  // one whose centre is closest to the click relative to its own size.
+  const off = p => Math.hypot(x - (p.box[0] + p.box[2]) / 2, y - (p.box[1] + p.box[3]) / 2) / Math.hypot(p.box[2] - p.box[0], p.box[3] - p.box[1]);
+  const hits = (data.boxes[frame] || []).filter(p => x >= p.box[0] && x <= p.box[2] && y >= p.box[1] && y <= p.box[3]);
+  hits.sort((a, b) => off(a) - off(b));
+  if (!hits.length) return;
+  if (adding) { adding = false; edit({ op: "add", frame, track_id: hits[0].track }, () => { selected = frame; }); }
+  else if (touchAt(frame)) edit({ op: "player", frame, track_id: hits[0].track }, () => { selected = frame; });
+  else say("No touch at this frame. Press A to add one.");
+});
+tl.addEventListener("click", e => {
+  const box = tl.getBoundingClientRect(), r = rally();
+  show(Math.round(r.start_frame + (e.clientX - box.left) / box.width * (r.end_frame - r.start_frame)));
+});
+$("touches").addEventListener("click", e => { const li = e.target.closest("li"); if (li) show(+li.dataset.f, +li.dataset.f); });
+$("video").addEventListener("change", e => { stem = e.target.value; loadList(); });
+$("rally").addEventListener("change", e => openRally(+e.target.value));
+$("prev").onclick = () => openRally(Math.max(0, rally().index - 1));
+$("next").onclick = () => openRally(Math.min(list.length - 1, rally().index + 1));
+for (const [id, key] of [["serve-us", "u"], ["serve-them", "t"], ["not-rally", "z"], ["win-us", "w"], ["win-them", "l"], ["done", "d"]]) $(id).onclick = () => commands[key]();
+loadVideos();
+</script>
+</body>
+</html>
