@@ -75,6 +75,7 @@
         <span><kbd>1</kbd>–<kbd>6</kbd></span><span>serve, receive, dig, set, attack, block</span>
         <span>click</span><span>a player box on a touch frame to change who touched</span>
         <span><kbd>A</kbd></span><span>add a missed touch here, then click the player</span>
+        <span>no box?</span><span>click the player anyway, then <kbd>U</kbd> (us) or <kbd>T</kbd> (them)</span>
       </div>
     </section>
   </aside>
@@ -86,6 +87,7 @@ const $ = id => document.getElementById(id);
 const view = $("view"), ctx = view.getContext("2d"), tl = $("timeline"), tctx = tl.getContext("2d");
 let stem = null, list = [], data = null, frame = 0, selected = null, playing = false, adding = false, speed = 0.5;
 let queue = Promise.resolve();
+let pending = null;  // a click on a player the detector missed, waiting for U / T
 const img = new Image();
 
 const api = async (path, body) => {
@@ -141,8 +143,14 @@ function draw() {
   }
   const ball = data.ball[frame] || (touch && [touch.x, touch.y]);
   if (ball) { ctx.lineWidth = 2; ctx.strokeStyle = "#ffe14d"; ctx.setLineDash(data.ball[frame] ? [] : [4, 4]); ctx.beginPath(); ctx.arc(ball[0], ball[1], 11, 0, 7); ctx.stroke(); ctx.setLineDash([]); }
+  const mark = pending || (touch && !touch.deleted && touch.point && { x: touch.point[0], y: touch.point[1] });
+  if (mark) {
+    ctx.lineWidth = 3; ctx.strokeStyle = pending ? "#fff" : COLOURS[touch.team];
+    ctx.beginPath(); ctx.moveTo(mark.x - 12, mark.y); ctx.lineTo(mark.x + 12, mark.y); ctx.moveTo(mark.x, mark.y - 12); ctx.lineTo(mark.x, mark.y + 12); ctx.stroke();
+  }
   let label = `frame ${frame}`;
-  if (touch) label += touch.deleted ? "  ·  rejected touch" : `  ·  ${touch.action} by ${touch.track_id ?? "nobody"} (${touch.team ?? "-"})`;
+  const who = t => t.track_id ?? (t.team ? "undetected player" : "nobody");
+  if (touch) label += touch.deleted ? "  ·  rejected touch" : `  ·  ${touch.action} by ${who(touch)} (${touch.team ?? "-"})`;
   if (adding) label += "  ·  click the player who touched the ball";
   ctx.font = "bold 20px system-ui"; ctx.lineWidth = 4; ctx.strokeStyle = "#000"; ctx.strokeText(label, 14, 28); ctx.fillStyle = "#fff"; ctx.fillText(label, 14, 28);
   drawTimeline();
@@ -169,7 +177,7 @@ function renderSide() {
   $("done").className = r.reviewed ? "on" : "";
   $("touches").innerHTML = r.contacts.map(c => {
     const cls = [c.frame === selected ? "sel" : "", c.deleted ? "deleted" : ""].join(" ");
-    const who = c.team ? `<span class="${c.team}">${c.team} #${c.track_id}</span>` : `<span class="none">nobody</span>`;
+    const who = c.team ? `<span class="${c.team}">${c.team} ${c.track_id === null ? "(no box)" : "#" + c.track_id}</span>` : `<span class="none">nobody</span>`;
     const tag = c.manual ? "added" : c.reviewed ? "checked" : c.ambiguous ? "unsure" : "";
     return `<li class="${cls}" data-f="${c.frame}"><span>${c.frame}</span><span>${c.action} · ${who}</span><span class="tag">${tag}</span></li>`;
   }).join("");
@@ -220,6 +228,15 @@ ACTIONS.forEach((action, i) => commands[i + 1] = () => needTouch() && edit({ op:
 
 document.addEventListener("keydown", e => {
   if (!data || e.target.tagName === "SELECT") return;
+  if (pending) {
+    const team = { u: "us", t: "them" }[e.key.toLowerCase()], at = pending;
+    if (!team && e.key !== "Escape") return;
+    e.preventDefault();
+    pending = null; adding = false; $("msg").textContent = "";
+    if (team) queue = queue.then(() => edit({ op: "team", frame, value: team, x: at.x, y: at.y }, () => { selected = frame; })).catch(() => {});
+    else draw();
+    return;
+  }
   const run = commands[e.key] || commands[e.key.toLowerCase()];
   if (!run) return;
   e.preventDefault();
@@ -234,7 +251,14 @@ view.addEventListener("click", e => {
   const off = p => Math.hypot(x - (p.box[0] + p.box[2]) / 2, y - (p.box[1] + p.box[3]) / 2) / Math.hypot(p.box[2] - p.box[0], p.box[3] - p.box[1]);
   const hits = (data.boxes[frame] || []).filter(p => x >= p.box[0] && x <= p.box[2] && y >= p.box[1] && y <= p.box[3]);
   hits.sort((a, b) => off(a) - off(b));
-  if (!hits.length) return;
+  if (!hits.length) {
+    // No detection box under the cursor: the toucher was missed, so ask for the team instead.
+    if (!adding && !touchAt(frame)) return say("No touch at this frame. Press A to add one.");
+    pending = { x: Math.round(x), y: Math.round(y) };
+    $("msg").textContent = "No box there. Press U if that player is on your team, T for the other team (Esc cancels).";
+    return draw();
+  }
+  pending = null;
   if (adding) { adding = false; edit({ op: "add", frame, track_id: hits[0].track }, () => { selected = frame; }); }
   else if (touchAt(frame)) edit({ op: "player", frame, track_id: hits[0].track }, () => { selected = frame; });
   else say("No touch at this frame. Press A to add one.");

@@ -73,6 +73,7 @@ class Contact(BaseModel):
     player: str | None = None  # roster name; None for opponents or unresolved
     team: Team | None = None
     court_xy: tuple[float, float] | None = None  # toucher's foot point, metres
+    point: tuple[float, float] | None = None  # where a person clicked a toucher the detector missed, px
     action: Action = Action.UNKNOWN
     ambiguous: bool = False  # another player was almost as close to the ball
     reviewed: bool = False  # a person confirmed or edited this touch

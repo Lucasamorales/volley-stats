@@ -41,6 +41,8 @@ class Edit(BaseModel):
     frame: int | None = None
     value: str | None = None
     track_id: int | None = None
+    x: float | None = None
+    y: float | None = None
 
 
 def _video(stem: str) -> Path:
@@ -210,6 +212,20 @@ def edit(stem: str, index: int, e: Edit) -> dict:
         elif e.op == "reopen":
             _log(stem, r, e, r.reviewed, False)
             r.reviewed, r.valid = False, None
+        elif e.op == "team" and team and e.frame is not None:
+            # The toucher has no detection box (hidden by the net, too small): record
+            # the team and where the person is, without a track.
+            if contact is None:
+                xs, ys = _ball(stem, match.video.n_frames, match.video.width)
+                x, y = ball_at(xs, ys, e.frame)
+                contact = Contact(frame=e.frame, x=x, y=y, manual=True)
+                r.contacts = sorted(r.contacts + [contact], key=lambda c: c.frame)
+            _log(stem, r, e, {"track": contact.track_id, "team": contact.team}, {"team": team, "point": [e.x, e.y]})
+            contact.track_id, contact.team, contact.court_xy, contact.ambiguous = None, team, None, False
+            contact.point = (e.x, e.y) if e.x is not None and e.y is not None else None
+            contact.deleted = False
+            relabel(r, match.video.fps)  # propose an action before locking the touch in
+            contact.reviewed = True
         elif e.op == "add" and e.frame is not None:
             if contact is not None:
                 raise HTTPException(409, "there is already a touch at this frame")
@@ -254,6 +270,7 @@ def _assign(match: MatchRecord, r: Rally, contact: Contact, track_id: int | None
     if team is None:
         raise HTTPException(400, "that person is not on the court")
     contact.track_id, contact.team, contact.court_xy, contact.ambiguous = who.track_id, team, xy, False
+    contact.point = None
 
 
 if __name__ == "__main__":
