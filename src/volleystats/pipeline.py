@@ -26,6 +26,7 @@ from .selection import load_track
 AMBIGUOUS_MARGIN = 0.15  # box heights; below this the toucher is a guess
 END_LINE_ZONE = 0.5  # metres inside an end line that still count as a serving position
 SAME_TOUCH = 3  # frames; a re-detected contact this close to a reviewed one is the same touch
+GROWTH = 15  # frames a fresh span must add to a finished rally before it is reopened
 
 
 def track_sides(
@@ -110,8 +111,17 @@ def merge_rallies(old: list[Rally], new: list[Rally], fps: float) -> list[Rally]
     def overlaps(a: Rally, b: Rally) -> bool:
         return a.start_frame < b.end_frame and b.start_frame < a.end_frame
 
-    frozen = [r for r in old if r.reviewed or r.valid is False]
-    open_old = [r for r in old if not (r.reviewed or r.valid is False)]
+    def outgrown(o: Rally) -> bool:
+        """A fresh span reaches well beyond this rally: it was cut short when reviewed."""
+        return any(
+            overlaps(o, r) and (o.start_frame - r.start_frame > GROWTH or r.end_frame - o.end_frame > GROWTH)
+            for r in new
+        )
+
+    # A finished rally that turns out to have been cut short goes back to open:
+    # its reviewed touches are carried over and the added frames get fresh proposals.
+    frozen = [r for r in old if (r.reviewed or r.valid is False) and not outgrown(r)]
+    open_old = [r for r in old if r not in frozen]
     merged = list(frozen)
     for rally in new:
         if any(overlaps(rally, f) for f in frozen):
@@ -123,9 +133,12 @@ def merge_rallies(old: list[Rally], new: list[Rally], fps: float) -> list[Rally]
         ]
         fresh = [c for c in rally.contacts if all(abs(c.frame - k.frame) > SAME_TOUCH for k in kept)]
         rally.contacts = sorted(kept + fresh, key=lambda c: c.frame)
-        for o in before:
+        # Several old fragments can fall into one fresh rally: the serve belongs
+        # to the earliest, the outcome to the latest.
+        for o in sorted(before, key=lambda o: o.start_frame, reverse=True):
             if o.serving_reviewed:
                 rally.serving_team, rally.serving_reviewed = o.serving_team, True
+        for o in sorted(before, key=lambda o: o.start_frame):
             if o.winner_reviewed:
                 rally.winner, rally.winner_reviewed = o.winner, True
         if kept or any(o.serving_reviewed for o in before):
@@ -186,6 +199,7 @@ if __name__ == "__main__":
             if result is not None:
                 fresh.append(result[0])
             print(f"rally {index + 1}/{len(spans)}", flush=True)
+        match = load_match(video)  # pick up reviews saved while this was running
         match.rallies = merge_rallies(match.rallies, fresh, match.video.fps)
         print(f"saved {len(match.rallies)} rallies to", save_match(video, match))
         sys.exit()

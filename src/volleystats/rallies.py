@@ -7,9 +7,9 @@ def segment_rallies(
     xs: np.ndarray,
     ys: np.ndarray,
     fps: float,
-    max_gap_s: float = 1.5,
+    max_gap_s: float = 3.0,
     min_rally_s: float = 1.5,
-    pad_s: float = 0.5,
+    pad_s: float = 2.0,
     min_speed: float = 1.0,
     max_step: int = 3,
 ) -> list[tuple[int, int]]:
@@ -21,6 +21,11 @@ def segment_rallies(
     or lying on the floor is not play). Live
     frames closer than `max_gap_s` are merged, spans shorter than `min_rally_s`
     are dropped, and the rest are padded by `pad_s` without overlapping.
+
+    The gap and padding are generous on purpose: the ball is rarely detected
+    low on the near court, so it vanishes for seconds inside a rally, and the
+    serve and the landing usually happen before the first and after the last
+    detection.
     """
     xs = np.asarray(xs, dtype=float)
     ys = np.asarray(ys, dtype=float)

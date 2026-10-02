@@ -66,11 +66,25 @@ def test_rallies_split_on_dead_time_and_ignore_static_ball():
     xs[750:780], ys[750:780] = 100 + 5 * t[750:780], 200  # brief stray ball: too short
     xs[800:880], ys[800:880] = 640, 900  # ball reappears elsewhere, lying on the floor
 
-    spans = segment_rallies(xs, ys, fps)
+    spans = segment_rallies(xs, ys, fps, max_gap_s=1.5, pad_s=0.5)
     assert len(spans) == 2
     (s0, e0), (s1, e1) = spans
     assert s0 <= 61 and 299 <= e0 < 480
     assert e0 < s1 <= 481 and 699 <= e1 < 750
+
+
+def test_rally_survives_losing_the_ball_and_gets_room_for_serve_and_landing():
+    fps = 30
+    xs = np.full(40 * fps, np.nan)
+    ys = np.full(40 * fps, np.nan)
+    t = np.arange(len(xs))
+    for lo, hi in [(300, 400), (470, 600), (900, 1000)]:  # ball lost for 2.3 s inside one rally
+        xs[lo:hi] = 500 + 200 * np.sin(t[lo:hi] / 10)
+        ys[lo:hi] = 300 + 100 * np.cos(t[lo:hi] / 7)
+
+    (s0, e0), (s1, e1) = segment_rallies(xs, ys, fps)
+    assert s0 <= 300 - 2 * fps + 1 and e0 >= 599 + 2 * fps - 1  # padded for the unseen serve and landing
+    assert e0 < s1
 
 
 def test_rallies_empty_track():
@@ -276,6 +290,17 @@ def test_reviewed_contacts_survive_in_an_unfinished_rally():
     by_frame = {c.frame: c for c in merged[0].contacts}
     assert sorted(by_frame) == [150, 200, 240]  # re-detections at 152 and 198 are the same touches
     assert by_frame[150].action is Action.BLOCK and by_frame[200].deleted
+
+
+def test_cut_off_rally_is_reopened_with_its_reviewed_touches():
+    done = span(100, 300, [150, 200], reviewed=True, serving_team=THEM, serving_reviewed=True)
+    for c in done.contacts:
+        c.reviewed = True
+    merged = merge_rallies([done], [span(40, 420, [60, 151, 200, 380])], fps=30)
+    (rally,) = merged
+    assert (rally.start_frame, rally.end_frame, rally.reviewed) == (40, 420, False)
+    assert [(c.frame, c.reviewed) for c in rally.contacts] == [(60, False), (150, True), (200, True), (380, False)]
+    assert rally.serving_team is THEM and rally.serving_reviewed
 
 
 def test_rejected_rally_stays_rejected():
