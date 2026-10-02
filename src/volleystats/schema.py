@@ -99,6 +99,8 @@ class StatEvent(BaseModel):
 class SetConfig(BaseModel):
     set_number: int
     us_side: Side  # which half our team plays on in this set
+    start_frame: int = 0
+    end_frame: int | None = None  # None = to the end of the video
 
 
 class MatchRecord(BaseModel):

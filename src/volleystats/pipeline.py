@@ -96,7 +96,14 @@ if __name__ == "__main__":
     H = np.array(match.homography)
     if not match.sets:
         sys.exit("match.json has no sets: record which half our team plays on first")
-    us_side = match.sets[0].us_side  # one side per video until set boundaries are marked
+
+    def set_at(frame: int):
+        """The set being played at this frame, or None during a break."""
+        for s in match.sets:
+            if s.start_frame <= frame < (s.end_frame or match.video.n_frames):
+                return s
+        return None
+
     xs, ys = load_track(out / "ball.csv", match.video.n_frames, width=match.video.width)
     spans = segment_rallies(xs, ys, match.video.fps)
     print(f"{len(spans)} rallies, ball visible in {np.mean(~np.isnan(xs)):.0%} of frames")
@@ -107,11 +114,18 @@ if __name__ == "__main__":
         else:
             index = int(arg)
         start, end = spans[index]
+        current = set_at(start)
+        if current is None:
+            print(f"rally {index} (frame {start}) is outside every set, skipping")
+            continue
         tracks = out / f"players_{start}_{end}.npz"
         if not tracks.exists():
             track_players(video, tracks, start, end)
         players = load_players(tracks)
-        rally = analyze_rally(index, start, end, xs, ys, players, H, us_side, match.video.fps)
+        rally = analyze_rally(
+            index, start, end, xs, ys, players, H, current.us_side, match.video.fps,
+            set_number=current.set_number,
+        )
         notes = {}
         for c in rally.contacts:
             flag = "?" if c.ambiguous else ""
