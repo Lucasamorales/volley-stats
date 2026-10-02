@@ -223,6 +223,16 @@ def edit(stem: str, index: int, e: Edit) -> dict:
             _log(stem, r, e, {"track": contact.track_id, "team": contact.team}, {"team": team, "point": [e.x, e.y]})
             contact.track_id, contact.team, contact.court_xy, contact.ambiguous = None, team, None, False
             contact.point = (e.x, e.y) if e.x is not None and e.y is not None else None
+            if e.track_id is not None:
+                # A detected person the court test put off the court (a server far
+                # behind the end line, feet hidden by the net): keep the track, and
+                # take the team from the reviewer instead of from the position.
+                obs = _players(str(players_file(PROCESSED / stem, r))).get(e.frame, [])
+                who = next((p for p in obs if p.track_id == e.track_id), None)
+                if who is None:
+                    raise HTTPException(404, f"no player {e.track_id} in frame {e.frame}")
+                contact.track_id, contact.point = who.track_id, None
+                contact.court_xy = _team_of(who, np.array(match.homography), _us_side(match, r))[1]
             contact.deleted = False
             relabel(r, match.video.fps)  # propose an action before locking the touch in
             contact.reviewed = True

@@ -143,7 +143,7 @@ function draw() {
   }
   const ball = data.ball[frame] || (touch && [touch.x, touch.y]);
   if (ball) { ctx.lineWidth = 2; ctx.strokeStyle = "#ffe14d"; ctx.setLineDash(data.ball[frame] ? [] : [4, 4]); ctx.beginPath(); ctx.arc(ball[0], ball[1], 11, 0, 7); ctx.stroke(); ctx.setLineDash([]); }
-  const mark = pending || (touch && !touch.deleted && touch.point && { x: touch.point[0], y: touch.point[1] });
+  const mark = (pending && pending.x !== undefined && pending) || (touch && !touch.deleted && touch.point && { x: touch.point[0], y: touch.point[1] });
   if (mark) {
     ctx.lineWidth = 3; ctx.strokeStyle = pending ? "#fff" : COLOURS[touch.team];
     ctx.beginPath(); ctx.moveTo(mark.x - 12, mark.y); ctx.lineTo(mark.x + 12, mark.y); ctx.moveTo(mark.x, mark.y - 12); ctx.lineTo(mark.x, mark.y + 12); ctx.stroke();
@@ -233,7 +233,7 @@ document.addEventListener("keydown", e => {
     if (!team && e.key !== "Escape") return;
     e.preventDefault();
     pending = null; adding = false; $("msg").textContent = "";
-    if (team) queue = queue.then(() => edit({ op: "team", frame, value: team, x: at.x, y: at.y }, () => { selected = frame; })).catch(() => {});
+    if (team) queue = queue.then(() => edit({ op: "team", frame, value: team, x: at.x, y: at.y, track_id: at.track }, () => { selected = frame; })).catch(() => {});
     else draw();
     return;
   }
@@ -259,6 +259,13 @@ view.addEventListener("click", e => {
     return draw();
   }
   pending = null;
+  if (hits[0].team === null) {
+    // A grey box: the court test thinks this person is off the court. Let the reviewer overrule it.
+    if (!adding && !touchAt(frame)) return say("No touch at this frame. Press A to add one.");
+    pending = { track: hits[0].track };
+    $("msg").textContent = `Player ${hits[0].track} was taken for a bystander. Press U if they are on your team, T for the other team (Esc cancels).`;
+    return draw();
+  }
   if (adding) { adding = false; edit({ op: "add", frame, track_id: hits[0].track }, () => { selected = frame; }); }
   else if (touchAt(frame)) edit({ op: "player", frame, track_id: hits[0].track }, () => { selected = frame; });
   else say("No touch at this frame. Press A to add one.");
