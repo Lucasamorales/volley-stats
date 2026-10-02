@@ -1,0 +1,17 @@
+# Footage, frames, crops and labels show real people: never commit them.
+data/
+weights/
+runs/
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.onnx
+*.pt
+
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+third_party/
